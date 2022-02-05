@@ -1,0 +1,292 @@
+package com.example.smarthomegesture
+
+import android.Manifest
+import android.content.Intent
+import android.os.Bundle
+import android.provider.MediaStore
+import android.widget.MediaController
+import android.widget.Toast
+import android.widget.Button
+import android.widget.VideoView
+import androidx.appcompat.app.AppCompatActivity
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import androidx.appcompat.app.AlertDialog
+
+import androidx.core.content.ContextCompat
+import androidx.core.app.ActivityCompat
+import okhttp3.*
+import java.io.IOException
+import okhttp3.RequestBody
+
+import android.R.attr.password
+import android.content.Context
+import android.database.Cursor
+import android.net.Uri
+import android.provider.DocumentsContract
+import android.util.Log
+import android.webkit.MimeTypeMap
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.asRequestBody
+import java.io.File
+import java.net.URI.create
+
+
+class PracticePage1 : AppCompatActivity(){
+    lateinit var videoview: VideoView
+    lateinit var recordButton: Button
+    lateinit var uploadButton: Button
+    private var ourRequest :Int = 23 //any number
+    private val PERMISSION_REQUEST_CODE = 200
+    private val client = OkHttpClient()
+    private var videouri: Uri? = null
+    lateinit var gesture: String
+
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_practice)
+
+        gesture = intent.getStringExtra("gesture").toString()
+        print("gesture = $gesture")
+        videoview = findViewById(R.id.videoView_capture)
+        recordButton = findViewById(R.id.record_button)
+        uploadButton = findViewById(R.id.upload_button)
+
+        val mediaCollection = MediaController(this)
+        mediaCollection.setAnchorView(videoview)
+        videoview.setMediaController(mediaCollection)
+
+        recordButton.setOnClickListener{
+            if(checkPermission(Manifest.permission.CAMERA,"Camera",PERMISSION_REQUEST_CODE))
+                startvideo()
+        }
+        uploadButton.setOnClickListener{
+            if(checkPermission(Manifest.permission.MANAGE_EXTERNAL_STORAGE,"Storage",PERMISSION_REQUEST_CODE))
+                uploadFile()
+        }
+    }
+
+    private fun uploadFile(){
+        val sourceFile :File
+        var uploadedFileName :String = gesture+"_PRACTICE_";
+
+        val sourceFilePath : String
+
+        if (videouri != null) {
+            sourceFile = File(getFilePath(this, videouri!!))
+//        else
+//            sourceFile = File(sourceFilePath)
+            if(sourceFile != null) {
+                Thread {
+                    val mimeType = getMimeType(sourceFile);
+                    if (mimeType == null) {
+                        Log.e("file error", "Not able to get mime type")
+                        return@Thread
+                    }
+                    try {
+                        val requestBody: RequestBody =
+                            MultipartBody.Builder().setType(MultipartBody.FORM)
+                                .addFormDataPart(
+                                    "file",
+                                    uploadedFileName,
+                                    sourceFile.asRequestBody(mimeType.toMediaTypeOrNull())
+                                )
+                                .build()
+
+                        val request: Request =
+                            Request.Builder().url("http://10.0.2.2:5000/upload-video")
+                                .post(requestBody)
+                                .build()
+
+                        val response: Response = client.newCall(request).execute()
+
+                        if (response.isSuccessful) {
+                            //Log.d("File upload","success, path: $serverUploadDirectoryPath$fileName")
+                            this.runOnUiThread {
+                                Toast.makeText(
+                                    this,
+                                    "File uploaded successfully ",
+                                    Toast.LENGTH_LONG
+                                )
+                                    .show()
+                                //at $serverUploadDirectoryPath$fileName
+                            }
+                        } else {
+                            Log.e("File upload", "failed")
+                            this.runOnUiThread {
+                                Toast.makeText(this, "File Upload Failed", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    } catch (ex: Exception) {
+                        ex.printStackTrace()
+                        Log.e("File upload", "failed")
+                        this.runOnUiThread {
+                            Toast.makeText(this, "File Upload Failed", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }.start()
+            }
+        }
+        else
+            this.runOnUiThread {
+                Toast.makeText(this, "Select a file and try again", Toast.LENGTH_LONG).show()
+            }
+        val goBacktoMain = Intent(this, MainActivity::class.java)
+        startActivity(goBacktoMain)
+    }
+
+    fun getMimeType(file: File): String? {
+        var type: String? = null
+        val extension = MimeTypeMap.getFileExtensionFromUrl(file.path)
+        if (extension != null) {
+            type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+        }
+        return type
+    }
+    private fun getFilePath(context: Context, uri: Uri): String?{
+       //if (isMediaDocument(uri)) {
+            val docId = DocumentsContract.getDocumentId(uri)
+            val split = docId.split(":".toRegex()).toTypedArray()
+            val type = split[0]
+            var contentUri: Uri? = null
+            if ("image" == type) {
+                contentUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            } else if ("video" == type) {
+                contentUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            } else if ("audio" == type) {
+                contentUri = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+            }
+            val selection = "_id=?"
+            val selectionArgs = arrayOf(split[1])
+            return getDataColumn(context, contentUri, selection, selectionArgs)
+//        }
+//        else
+//            return null
+    }
+
+    fun getDataColumn(context: Context, uri: Uri?, selection: String?, selectionArgs: Array<String>?): String? {
+        var cursor: Cursor? = null
+        val column = "_data"
+        val projection = arrayOf(column)
+        try {
+            cursor = uri?.let { context.getContentResolver().query(it, projection, selection, selectionArgs,null) }
+            if (cursor != null && cursor.moveToFirst()) {
+                val column_index: Int = cursor.getColumnIndexOrThrow(column)
+                return cursor.getString(column_index)
+            }
+        } finally {
+            if (cursor != null) cursor.close()
+        }
+        return null
+    }
+
+    private fun isMediaDocument(uri: Uri): Boolean {
+        return "com.android.providers.media.documents" == uri.authority
+    }
+    private fun startvideo(){
+        val intent = Intent(MediaStore.ACTION_VIDEO_CAPTURE)
+        intent.putExtra(MediaStore.EXTRA_DURATION_LIMIT, 5);
+        if(intent.resolveActivity(packageManager) != null){
+            startActivityForResult(intent,ourRequest)
+        }
+    }
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if(grantResults.isEmpty() || grantResults[0]!= PackageManager.PERMISSION_GRANTED){
+            Toast.makeText(applicationContext,"Permission Refused",Toast.LENGTH_SHORT).show()
+
+        }
+        else{
+            Toast.makeText(applicationContext,"Permission Accepted",Toast.LENGTH_SHORT).show()
+            if(name == "Camera"){
+                startvideo()
+            }
+            else if(name == "Storage"){
+                uploadFile()
+            }
+        }
+
+    }
+    private fun checkPermission(permission: String,name:String, requestCode: Int):Boolean {
+        if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.M){
+            when {
+                    ContextCompat.checkSelfPermission(
+                        applicationContext,
+                        permission
+                    ) == PackageManager.PERMISSION_GRANTED -> {
+                        return true
+                    }
+                    shouldShowRequestPermissionRationale(permission) -> showDialog(
+                        permission,
+                        name,
+                        requestCode
+                    )
+
+                    else -> ActivityCompat.requestPermissions(
+                        this,
+                        arrayOf(permission, name),
+                        PERMISSION_REQUEST_CODE
+                    )
+            }
+            return false
+        }
+        else{
+            return false
+        }
+    }
+    private fun showDialog(permission: String,name:String, requestCode: Int) {
+        val builder = AlertDialog.Builder(this)
+        if(name == "Camera") {
+            builder.apply {
+                setMessage("Permission to access your $name is required to record video.")
+                setTitle("Permission Required:")
+                setPositiveButton("OK") { dialog, which ->
+                    this
+                    ActivityCompat.requestPermissions(
+                        this@PracticePage1,
+                        arrayOf(permission),
+                        requestCode
+                    )
+                }
+            }
+            val dialog = builder.create()
+            dialog.show()
+        }
+        if(name == "Storage") {
+            builder.apply {
+                setMessage("Permission to access your $name is required to Upload.")
+                setTitle("Permission Required:")
+                setPositiveButton("OK") { dialog, which ->
+                    this
+                    ActivityCompat.requestPermissions(
+                        this@PracticePage1,
+                        arrayOf(permission,name),
+                        requestCode
+                    )
+                }
+            }
+            val dialog = builder.create()
+            dialog.show()
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if(requestCode == ourRequest && resultCode == RESULT_OK){
+
+                //getting data from uri
+                videouri = data?.data!!
+                videoview.setVideoURI(videouri)
+                videoview.start()
+        }
+    }
+}
